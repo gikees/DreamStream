@@ -84,7 +84,8 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
 
     # Build enhancement pipeline
     pipeline = EnhancementPipeline(
-        cfg.receiver, cfg.device, input_fps=meta.fps, output_size=(out_w, out_h)
+        cfg.receiver, cfg.device, input_fps=meta.fps,
+        output_size=(out_w, out_h), input_size=(meta.width, meta.height),
     )
 
     # Metrics tracker

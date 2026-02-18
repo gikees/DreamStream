@@ -30,12 +30,25 @@ class EnhancementPipeline:
         device: torch.device,
         input_fps: float,
         output_size: Tuple[int, int] = (1280, 720),
+        input_size: Tuple[int, int] | None = None,
     ) -> None:
         self._config = config
         self._device = device
         self._input_fps = input_fps
         self._output_size = output_size  # (width, height)
         self._prev_frame: np.ndarray | None = None
+
+        # Skip AI upscaler when input already meets or exceeds target
+        self._needs_ai_upscale = True
+        if input_size is not None:
+            in_w, in_h = input_size
+            out_w, out_h = output_size
+            if in_h >= out_h and in_w >= out_w:
+                self._needs_ai_upscale = False
+                logger.info(
+                    "Input %dx%d >= target %dx%d — skipping AI upscaler",
+                    in_w, in_h, out_w, out_h,
+                )
 
         # Model status tracking
         self.model_status: Dict[str, str] = {}
@@ -68,6 +81,11 @@ class EnhancementPipeline:
             return DuplicationInterpolator()
 
     def _build_upscaler(self, config: ReceiverConfig) -> Upscaler:
+        if not self._needs_ai_upscale:
+            self.model_status["upscaler"] = "bicubic (input >= target)"
+            logger.info("Upscaler: bicubic (input already meets target resolution)")
+            return BicubicUpscaler()
+
         weights_path = config.weights_dir / "RealESRGAN_x4.pth"
         try:
             upscaler = RealESRGANUpscaler(weights_path, self._device)
