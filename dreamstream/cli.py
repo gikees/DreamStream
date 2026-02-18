@@ -173,6 +173,7 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
 
 WEIGHT_URLS = {
     "RealESRGAN_x4.pth": "https://huggingface.co/ai-forever/Real-ESRGAN/resolve/main/RealESRGAN_x4.pth",
+    "rife/flownet.pkl": "https://huggingface.co/hzwer/Practical-RIFE/resolve/main/flownet.pkl",
 }
 
 
@@ -187,6 +188,7 @@ def _download_weights(weights_dir: Path) -> None:
         if dest.exists():
             logger.info("Already exists: %s", dest)
             continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
         logger.info("Downloading %s → %s", url, dest)
         urllib.request.urlretrieve(url, dest)
         logger.info("Downloaded %s (%.1f MB)", filename, dest.stat().st_size / 1e6)

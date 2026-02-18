@@ -82,7 +82,7 @@ class RIFEInterpolator(Interpolator):
     """
 
     def __init__(self, weights_path: Path | str, device: torch.device) -> None:
-        from model.RIFE_HDv3 import Model
+        from dreamstream.models.rife.ifnet import Model
 
         self._device = device
         self._model = Model()

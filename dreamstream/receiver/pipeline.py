@@ -46,7 +46,7 @@ class ReconstructionPipeline:
 
     def _build_interpolator(self, config: ReceiverConfig) -> Interpolator:
         # Try RIFE first (AI interpolation)
-        weights_path = config.weights_dir / "flownet.pkl"
+        weights_path = config.weights_dir / "rife" / "flownet.pkl"
         try:
             interp = RIFEInterpolator(weights_path, self._device)
             self.model_status["interpolator"] = "rife"
