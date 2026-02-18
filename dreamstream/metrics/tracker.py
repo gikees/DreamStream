@@ -73,9 +73,11 @@ class MetricsTracker:
         self._output_count = 0
         self._start_time = 0.0
         self._frame_start = 0.0
+        self._source_resolution = ""
 
-    def start(self) -> None:
+    def start(self, source_resolution: str = "") -> None:
         self._start_time = time.monotonic()
+        self._source_resolution = source_resolution
 
     def record_frame(
         self,
@@ -135,7 +137,7 @@ class MetricsTracker:
 
         return PipelineMetrics(
             profile=self._config.profile.value,
-            source_resolution="(from input)",
+            source_resolution=self._source_resolution or "(unknown)",
             degraded_resolution=f"{deg_w}x{deg_h}",
             output_resolution=f"{out_w}x{out_h}",
             sender_fps=sender_cfg.target_fps,

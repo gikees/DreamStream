@@ -115,7 +115,7 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
         cfg.out_dir / "stitched_grid.mp4", cfg.receiver.output_fps, (grid_w, grid_h)
     )
 
-    tracker.start()
+    tracker.start(source_resolution=f"{meta.width}x{meta.height}")
     frame_idx = 0
 
     for deg_frame, orig_idx in degrade_video(input_path, cfg.sender):
