@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dreamstream"
+version = "0.1.0"
+description = "Bandwidth-resilient generative video reconstruction pipeline for NVIDIA GB10"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "opencv-python>=4.8.0",
+    "diffusers>=0.25.0",
+    "gradio>=4.0.0",
+]
+
+[project.scripts]
+dreamstream = "dreamstream.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dreamstream*"]

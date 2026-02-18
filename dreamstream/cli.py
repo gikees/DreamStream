@@ -1,0 +1,195 @@
+"""CLI entry point for DreamStream."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+from dreamstream.config import (
+    PipelineConfig,
+    Profile,
+    ReceiverConfig,
+    SenderConfig,
+    resolve_device,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="dreamstream",
+        description="DreamStream — bandwidth-resilient generative video reconstruction",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # --- run ---
+    run_p = sub.add_parser("run", help="Process a video through the pipeline")
+    run_p.add_argument("-i", "--input", required=True, type=Path, help="Input video path")
+    run_p.add_argument(
+        "-p",
+        "--profile",
+        default="low_rgb",
+        choices=[p.value for p in Profile],
+        help="Sender profile (default: low_rgb)",
+    )
+    run_p.add_argument("-o", "--out-dir", default=Path("outputs"), type=Path, help="Output directory")
+    run_p.add_argument("--output-height", default=720, type=int, help="Receiver output height (default: 720)")
+    run_p.add_argument("--output-fps", default=24.0, type=float, help="Receiver output FPS (default: 24)")
+    run_p.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
+
+    # --- ui ---
+    ui_p = sub.add_parser("ui", help="Launch Gradio web UI")
+    ui_p.add_argument("--share", action="store_true", help="Create a public Gradio link")
+    ui_p.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
+
+    return parser
+
+
+def _setup_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
+def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
+    """Execute the full sender→receiver→viz pipeline.
+
+    Returns a metrics dict.
+    """
+    from dreamstream.metrics.tracker import MetricsTracker
+    from dreamstream.receiver.pipeline import ReconstructionPipeline
+    from dreamstream.sender_sim.degrader import degrade_video, probe_video
+    from dreamstream.sender_sim.hints import compute_canny_edges, edges_to_rgb
+    from dreamstream.viz.composer import compose_grid
+    from dreamstream.viz.heatmap import generate_heatmap
+    from dreamstream.config import create_video_writer
+
+    # Probe source video
+    meta = probe_video(input_path)
+    logger.info(
+        "Source: %dx%d @ %.1f fps, %d frames",
+        meta.width, meta.height, meta.fps, meta.frame_count,
+    )
+
+    # Build receiver pipeline
+    pipeline = ReconstructionPipeline(cfg.receiver, cfg.device)
+    num_output = round(cfg.receiver.output_fps / cfg.sender.target_fps)
+
+    # Metrics tracker
+    tracker = MetricsTracker(cfg)
+
+    # Compute output dimensions (maintain aspect ratio)
+    aspect = meta.width / meta.height
+    out_h = cfg.receiver.output_height
+    out_w = int(out_h * aspect)
+    out_w = out_w if out_w % 2 == 0 else out_w + 1
+
+    # Degraded dimensions
+    deg_h = cfg.sender.target_height
+    deg_w = int(deg_h * aspect)
+    deg_w = deg_w if deg_w % 2 == 0 else deg_w + 1
+
+    # Grid dimensions: 2x2 of 640x360 cells = 1280x720
+    grid_w, grid_h = 1280, 720
+
+    # Create video writers
+    degraded_writer = create_video_writer(
+        cfg.out_dir / "degraded.mp4", cfg.sender.target_fps, (deg_w, deg_h)
+    )
+    reliable_writer = create_video_writer(
+        cfg.out_dir / "reliable.mp4", cfg.receiver.output_fps, (out_w, out_h)
+    )
+    dream_writer = create_video_writer(
+        cfg.out_dir / "dream.mp4", cfg.receiver.output_fps, (out_w, out_h)
+    )
+    heatmap_writer = create_video_writer(
+        cfg.out_dir / "heatmap.mp4", cfg.receiver.output_fps, (out_w, out_h)
+    )
+    grid_writer = create_video_writer(
+        cfg.out_dir / "stitched_grid.mp4", cfg.receiver.output_fps, (grid_w, grid_h)
+    )
+
+    tracker.start()
+    frame_idx = 0
+
+    for deg_frame, orig_idx in degrade_video(input_path, cfg.sender):
+        edges = None
+        if cfg.profile == Profile.LOW_RGB_EDGES:
+            edges = compute_canny_edges(
+                deg_frame, cfg.sender.canny_low, cfg.sender.canny_high
+            )
+
+        reliable_frames = pipeline.get_reliable_frames(deg_frame, edges)
+        dream_frames = pipeline.get_dream_frames(deg_frame, edges)
+
+        # Write degraded (1 frame per source frame at sender fps)
+        degraded_writer.write(deg_frame)
+
+        # Write reliable + dream + heatmap + grid (num_output frames per source frame)
+        for i, (rel_f, drm_f) in enumerate(zip(reliable_frames, dream_frames)):
+            reliable_writer.write(rel_f)
+            dream_writer.write(drm_f)
+
+            # Heatmap based on dream frame
+            hmap = generate_heatmap(drm_f, edges=edges)
+            heatmap_writer.write(hmap)
+
+            # Compose grid
+            grid = compose_grid(deg_frame.copy(), rel_f.copy(), drm_f.copy(), hmap.copy())
+            grid_writer.write(grid)
+
+        tracker.record_frame(deg_frame, reliable_frames, dream_frames)
+        frame_idx += 1
+
+    # Release all writers
+    for w in [degraded_writer, reliable_writer, dream_writer, heatmap_writer, grid_writer]:
+        w.release()
+
+    metrics = tracker.finalize(pipeline.model_status)
+    metrics_path = cfg.out_dir / "metrics.json"
+    metrics.to_json(metrics_path)
+    logger.info("Metrics written to %s", metrics_path)
+    logger.info("Processed %d degraded frames → %d output frames", frame_idx, frame_idx * num_output)
+
+    return metrics.to_dict()
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    _setup_logging(getattr(args, "verbose", False))
+
+    if args.command == "run":
+        input_path = args.input
+        if not input_path.exists():
+            logger.error("Input file not found: %s", input_path)
+            sys.exit(1)
+
+        cfg = PipelineConfig(
+            sender=SenderConfig(),
+            receiver=ReceiverConfig(
+                output_height=args.output_height,
+                output_fps=args.output_fps,
+            ),
+            profile=Profile(args.profile),
+            device=resolve_device(),
+            out_dir=args.out_dir,
+        )
+        _run_pipeline(cfg, input_path)
+
+    elif args.command == "ui":
+        from dreamstream.ui.app import create_app
+
+        app = create_app()
+        app.launch(share=args.share)
