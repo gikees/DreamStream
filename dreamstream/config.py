@@ -99,9 +99,13 @@ def create_video_writer(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Suppress FFmpeg [ERROR] spam during codec probing — the fallback is intentional
+    # Suppress all FFmpeg stderr spam during codec probing — the fallback is intentional
+    import os
     prev_log_level = cv2.utils.logging.getLogLevel()
     cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    stderr_fd = os.dup(2)
+    os.dup2(devnull_fd, 2)
     try:
         for codec in FOURCC_CANDIDATES:
             fourcc = cv2.VideoWriter_fourcc(*codec)
@@ -111,6 +115,9 @@ def create_video_writer(
                 return writer
             writer.release()
     finally:
+        os.dup2(stderr_fd, 2)
+        os.close(stderr_fd)
+        os.close(devnull_fd)
         cv2.utils.logging.setLogLevel(prev_log_level)
 
     raise RuntimeError(
