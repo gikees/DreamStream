@@ -173,13 +173,19 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
 
 WEIGHT_URLS = {
     "RealESRGAN_x4.pth": "https://huggingface.co/ai-forever/Real-ESRGAN/resolve/main/RealESRGAN_x4.pth",
-    "rife/flownet.pkl": "https://huggingface.co/jbilcke-hf/varnish/resolve/main/rife/flownet.pkl",
+}
+
+# Google Drive file IDs for weights that aren't on HuggingFace
+GDRIVE_WEIGHTS = {
+    "rife/flownet.pkl": "1gViYvvQrtETBgU1w8axZSsr7YUuw31uy",  # Practical-RIFE v4.26
 }
 
 
 def _download_weights(weights_dir: Path) -> None:
     """Download optional AI model weights to weights_dir."""
     import urllib.request
+    import zipfile
+    import tempfile
 
     weights_dir.mkdir(parents=True, exist_ok=True)
 
@@ -189,9 +195,38 @@ def _download_weights(weights_dir: Path) -> None:
             logger.info("Already exists: %s", dest)
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
-        logger.info("Downloading %s → %s", url, dest)
+        logger.info("Downloading %s -> %s", url, dest)
         urllib.request.urlretrieve(url, dest)
         logger.info("Downloaded %s (%.1f MB)", filename, dest.stat().st_size / 1e6)
+
+    # Google Drive weights (requires gdown)
+    for filename, file_id in GDRIVE_WEIGHTS.items():
+        dest = weights_dir / filename
+        if dest.exists():
+            logger.info("Already exists: %s", dest)
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            import gdown
+        except ImportError:
+            logger.warning(
+                "gdown not installed — cannot download %s from Google Drive. "
+                "Install with: pip install gdown", filename,
+            )
+            continue
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = Path(tmpdir) / "model.zip"
+            logger.info("Downloading %s from Google Drive (id=%s)", filename, file_id)
+            gdown.download(id=file_id, output=str(zip_path), quiet=False)
+            with zipfile.ZipFile(zip_path) as zf:
+                # Find flownet.pkl inside the zip
+                pkl_names = [n for n in zf.namelist() if n.endswith("flownet.pkl")]
+                if not pkl_names:
+                    logger.error("No flownet.pkl found in downloaded zip for %s", filename)
+                    continue
+                with zf.open(pkl_names[0]) as src, open(dest, "wb") as dst:
+                    dst.write(src.read())
+            logger.info("Downloaded %s (%.1f MB)", filename, dest.stat().st_size / 1e6)
 
 
 def main(argv: list[str] | None = None) -> None:
