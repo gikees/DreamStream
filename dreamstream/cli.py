@@ -228,6 +228,18 @@ def _download_weights(weights_dir: Path) -> None:
                     dst.write(src.read())
             logger.info("Downloaded %s (%.1f MB)", filename, dest.stat().st_size / 1e6)
 
+    # Pre-cache SVD model (optional — diffusers handles caching automatically)
+    try:
+        from diffusers import StableVideoDiffusionPipeline
+
+        logger.info("Pre-caching SVD model (stabilityai/stable-video-diffusion-img2vid)...")
+        StableVideoDiffusionPipeline.from_pretrained(
+            "stabilityai/stable-video-diffusion-img2vid",
+        )
+        logger.info("SVD model cached successfully")
+    except Exception as e:
+        logger.info("SVD pre-cache skipped (%s)", e)
+
 
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()

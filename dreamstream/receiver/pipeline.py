@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from dreamstream.config import ReceiverConfig
-from dreamstream.receiver.enhancer import Enhancer, PassthroughEnhancer
+from dreamstream.receiver.enhancer import Enhancer, PassthroughEnhancer, SVDEnhancer
 from dreamstream.receiver.interpolator import (
     DuplicationInterpolator,
     Interpolator,
@@ -83,9 +83,16 @@ class ReconstructionPipeline:
             return BicubicUpscaler()
 
     def _build_enhancer(self, config: ReceiverConfig) -> Enhancer:
-        self.model_status["enhancer"] = "passthrough"
-        logger.info("Enhancer: passthrough (baseline)")
-        return PassthroughEnhancer()
+        try:
+            enhancer = SVDEnhancer(self._device)
+            self.model_status["enhancer"] = "svd"
+            logger.info("Enhancer: SVD (Stable Video Diffusion)")
+            return enhancer
+        except Exception as e:
+            logger.info("SVD unavailable (%s), falling back to passthrough", e)
+            self.model_status["enhancer"] = "passthrough"
+            logger.info("Enhancer: passthrough (baseline)")
+            return PassthroughEnhancer()
 
     @property
     def num_output_frames(self) -> int:
@@ -109,10 +116,9 @@ class ReconstructionPipeline:
             self._reliable_upscaler.upscale(f, self._output_size) for f in interpolated
         ]
 
-        dream = []
-        for f in interpolated:
-            up = self._dream_upscaler.upscale(f, self._output_size)
-            enhanced = self._enhancer.enhance(up, edges=edges)
-            dream.append(enhanced)
+        upscaled_dream = [
+            self._dream_upscaler.upscale(f, self._output_size) for f in interpolated
+        ]
+        dream = self._enhancer.enhance_batch(upscaled_dream, edges=edges)
 
         return reliable, dream
