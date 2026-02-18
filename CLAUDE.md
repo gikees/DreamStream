@@ -16,6 +16,7 @@ Sender degrades video to 240p@3fps hints; receiver reconstructs 720p@24fps using
 - Optional models (RIFE, Real-ESRGAN, LCM) are loaded behind try/except. Missing weights = fallback to baseline.
 - `weights/` directory is gitignored. Never commit model weights.
 - Vendored model code lives in `dreamstream/models/<model_name>/`. Must be pure PyTorch — no custom CUDA ops.
+- When vendoring a model, **always verify the architecture against the actual checkpoint** (`state_dict` key names and shapes). Different RIFE versions share the same file name but have incompatible architectures.
 
 ## GB10 / Unified Memory
 - Use `torch.device('cuda')` when available. Log `torch.cuda.get_device_name()` at startup.
@@ -25,6 +26,7 @@ Sender degrades video to 240p@3fps hints; receiver reconstructs 720p@24fps using
 
 ## Video I/O
 - Codec fallback order: avc1 -> mp4v -> XVID. Use `create_video_writer()` from config.py.
+- FFmpeg stderr is redirected to /dev/null during codec probing to suppress `h264_v4l2m2m` noise on GB10.
 - All frame dimensions must be even (width and height) for codec compatibility.
 - Use INTER_AREA for downscaling, INTER_CUBIC for upscaling.
 - Process frames via generators — never load entire video into memory.
@@ -42,6 +44,10 @@ Sender degrades video to 240p@3fps hints; receiver reconstructs 720p@24fps using
 
 ## Remote Machine (GB10)
 - SSH: `sshpass -p '123456' ssh -o StrictHostKeyChecking=no dell@100.89.249.36`
+- Project path: `~/DreamStream`, venv at `.venv/` (activate with `source .venv/bin/activate`)
+- GPU: NVIDIA GB10 (Grace Blackwell), CUDA available
+- To deploy: push to origin, then `git pull && pip install -e .` on remote
+- `gdown` installed at `/home/dell/.local/bin/gdown` (not on PATH — use full path or venv)
 
 ## Receiver Fallback Chains
 Each receiver component tries AI models first, then falls back to baselines:
@@ -52,8 +58,10 @@ Each receiver component tries AI models first, then falls back to baselines:
 
 ## Weight Management
 - Weight paths: `weights/RealESRGAN_x4.pth`, `weights/rife/flownet.pkl`
-- URLs registered in `WEIGHT_URLS` dict in `cli.py`. Download via `python -m dreamstream download-weights`.
-- `_download_weights()` creates subdirectories automatically. New weights: add entry to `WEIGHT_URLS`.
+- Direct URLs in `WEIGHT_URLS` dict, Google Drive IDs in `GDRIVE_WEIGHTS` dict (both in `cli.py`).
+- Download via `python -m dreamstream download-weights` (requires `gdown` for RIFE weights).
+- `_download_weights()` creates subdirectories automatically.
+- RIFE uses official Practical-RIFE v4.26 weights (Google Drive). Do NOT use HuggingFace mirrors — they serve incompatible older architectures.
 
 ## Profiles
 - `low_rgb`: 240p RGB @ 3fps (default)
