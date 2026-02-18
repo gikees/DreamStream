@@ -1,9 +1,8 @@
-"""IFNet v4.6 — Practical-RIFE intermediate flow network (inference only).
+"""IFNet_HDv3 — Practical-RIFE v4.26 intermediate flow network (inference only).
 
-Vendored from https://github.com/hzwer/Practical-RIFE.
-Architecture matched to the public flownet.pkl weights (3 student blocks,
-uniform c=90, separate flow/mask deconv heads).
-Adapted: device-agnostic, no xformers/flash-attn, teacher block ignored.
+Vendored from https://github.com/hzwer/Practical-RIFE (v4.26, 2024.09.21).
+Architecture: Head encoder + 5 IFBlocks with ResConv and PixelShuffle output.
+Adapted: device-agnostic, no xformers/flash-attn, teacher/contextnet removed.
 """
 
 from __future__ import annotations
@@ -27,12 +26,44 @@ def conv(in_planes: int, out_planes: int, kernel_size: int = 3, stride: int = 1,
             kernel_size=kernel_size, stride=stride,
             padding=padding, dilation=dilation, bias=True,
         ),
-        nn.PReLU(out_planes),
+        nn.LeakyReLU(0.2, True),
     )
 
 
+class Head(nn.Module):
+    """Lightweight feature encoder: 3-channel image -> 4-channel features."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cnn0 = nn.Conv2d(3, 16, 3, 2, 1)
+        self.cnn1 = nn.Conv2d(16, 16, 3, 1, 1)
+        self.cnn2 = nn.Conv2d(16, 16, 3, 1, 1)
+        self.cnn3 = nn.ConvTranspose2d(16, 4, 4, 2, 1)
+        self.relu = nn.LeakyReLU(0.2, True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.relu(self.cnn0(x))
+        x = self.relu(self.cnn1(x))
+        x = self.relu(self.cnn2(x))
+        x = self.cnn3(x)
+        return x
+
+
+class ResConv(nn.Module):
+    """Residual conv block with learnable scale."""
+
+    def __init__(self, c: int, dilation: int = 1) -> None:
+        super().__init__()
+        self.conv = nn.Conv2d(c, c, 3, 1, dilation, dilation=dilation, groups=1)
+        self.beta = nn.Parameter(torch.ones((1, c, 1, 1)), requires_grad=True)
+        self.relu = nn.LeakyReLU(0.2, True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.relu(self.conv(x) * self.beta + x)
+
+
 class IFBlock(nn.Module):
-    """Single scale block with separate flow/mask deconv heads."""
+    """Multi-scale block: flow + mask + feature output via PixelShuffle."""
 
     def __init__(self, in_planes: int, c: int = 64) -> None:
         super().__init__()
@@ -40,45 +71,43 @@ class IFBlock(nn.Module):
             conv(in_planes, c // 2, 3, 2, 1),
             conv(c // 2, c, 3, 2, 1),
         )
-        self.convblock0 = nn.Sequential(conv(c, c), conv(c, c))
-        self.convblock1 = nn.Sequential(conv(c, c), conv(c, c))
-        self.convblock2 = nn.Sequential(conv(c, c), conv(c, c))
-        self.convblock3 = nn.Sequential(conv(c, c), conv(c, c))
-        self.conv1 = nn.Sequential(
-            nn.ConvTranspose2d(c, c // 2, 4, 2, 1),
-            nn.PReLU(c // 2),
-            nn.ConvTranspose2d(c // 2, 4, 4, 2, 1),
+        self.convblock = nn.Sequential(
+            ResConv(c), ResConv(c), ResConv(c), ResConv(c),
+            ResConv(c), ResConv(c), ResConv(c), ResConv(c),
         )
-        self.conv2 = nn.Sequential(
-            nn.ConvTranspose2d(c, c // 2, 4, 2, 1),
-            nn.PReLU(c // 2),
-            nn.ConvTranspose2d(c // 2, 1, 4, 2, 1),
+        # Output: 4*13 channels -> PixelShuffle(2) -> 13 channels at 2x spatial
+        # 13 = 4 (flow) + 1 (mask) + 8 (features)
+        self.lastconv = nn.Sequential(
+            nn.ConvTranspose2d(c, 4 * 13, 4, 2, 1),
+            nn.PixelShuffle(2),
         )
 
-    def forward(self, x: torch.Tensor, scale: int) -> tuple[torch.Tensor, torch.Tensor]:
-        if scale != 1:
-            x = F.interpolate(x, scale_factor=1.0 / scale, mode="bilinear", align_corners=False)
-        x = self.conv0(x)
-        x = self.convblock0(x) + x
-        x = self.convblock1(x) + x
-        x = self.convblock2(x) + x
-        x = self.convblock3(x) + x
-        flow = self.conv1(x)
-        mask = self.conv2(x)
-        flow = F.interpolate(flow, scale_factor=scale, mode="bilinear", align_corners=False) * scale
-        mask = F.interpolate(mask, scale_factor=scale, mode="bilinear", align_corners=False)
-        return flow, mask
+    def forward(self, x: torch.Tensor, flow: torch.Tensor | None = None, scale: int = 1) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        x = F.interpolate(x, scale_factor=1.0 / scale, mode="bilinear", align_corners=False)
+        if flow is not None:
+            flow = F.interpolate(flow, scale_factor=1.0 / scale, mode="bilinear", align_corners=False) * (1.0 / scale)
+            x = torch.cat((x, flow), dim=1)
+        feat = self.conv0(x)
+        feat = self.convblock(feat)
+        tmp = self.lastconv(feat)
+        tmp = F.interpolate(tmp, scale_factor=scale, mode="bilinear", align_corners=False)
+        flow = tmp[:, :4] * scale
+        mask = tmp[:, 4:5]
+        feat = tmp[:, 5:]
+        return flow, mask, feat
 
 
 class IFNet(nn.Module):
-    """Multi-scale IFNet: 3 student blocks + teacher (unused at inference)."""
+    """IFNet_HDv3 v4.26: Head encoder + 5 IFBlocks."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.block0 = IFBlock(7 + 4, c=90)
-        self.block1 = IFBlock(7 + 4, c=90)
-        self.block2 = IFBlock(7 + 4, c=90)
-        self.block_tea = IFBlock(10 + 4, c=90)
+        self.block0 = IFBlock(7 + 8, c=192)
+        self.block1 = IFBlock(8 + 4 + 8 + 8, c=128)
+        self.block2 = IFBlock(8 + 4 + 8 + 8, c=96)
+        self.block3 = IFBlock(8 + 4 + 8 + 8, c=64)
+        self.block4 = IFBlock(8 + 4 + 8 + 8, c=32)
+        self.encode = Head()
 
     def forward(
         self,
@@ -87,55 +116,58 @@ class IFNet(nn.Module):
         scale_list: list[int] | None = None,
     ) -> torch.Tensor:
         if scale_list is None:
-            scale_list = [4, 2, 1]
+            scale_list = [8, 4, 2, 1, 1]
 
-        img0 = x[:, :3]
-        img1 = x[:, 3:6]
+        channel = x.shape[1] // 2
+        img0 = x[:, :channel]
+        img1 = x[:, channel:]
 
-        # Timestep map: same spatial dims as input, filled with timestep value
-        timestep_tensor = (x[:, :1].clone() * 0 + 1) * timestep
+        if not torch.is_tensor(timestep):
+            timestep = (x[:, :1].clone() * 0 + 1) * timestep
+        else:
+            timestep = timestep.repeat(1, 1, img0.shape[2], img0.shape[3])
 
-        # Flow and mask start at zeros — accumulated across blocks (coarse-to-fine)
-        B, _, H, W = x.shape
-        flow = torch.zeros(B, 4, H, W, device=x.device)
-        mask = torch.zeros(B, 1, H, W, device=x.device)
+        f0 = self.encode(img0[:, :3])
+        f1 = self.encode(img1[:, :3])
 
-        blocks = [self.block0, self.block1, self.block2]
-        for block, scale in zip(blocks, scale_list):
-            flow_d, mask_d = block(
-                torch.cat((img0, img1, timestep_tensor, flow), dim=1),
-                scale=scale,
-            )
-            flow = flow + flow_d
-            mask = mask + mask_d
+        flow = None
+        mask = None
+        feat = None
+        warped_img0 = img0
+        warped_img1 = img1
 
-        # Final warp and blend using learned mask
-        warped_img0 = warp(img0, flow[:, :2])
-        warped_img1 = warp(img1, flow[:, 2:4])
+        blocks = [self.block0, self.block1, self.block2, self.block3, self.block4]
+        for i, (block, scale) in enumerate(zip(blocks, scale_list)):
+            if flow is None:
+                flow, mask, feat = block(
+                    torch.cat((img0[:, :3], img1[:, :3], f0, f1, timestep), dim=1),
+                    None,
+                    scale=scale,
+                )
+            else:
+                wf0 = warp(f0, flow[:, :2])
+                wf1 = warp(f1, flow[:, 2:4])
+                fd, mask, feat = block(
+                    torch.cat((warped_img0[:, :3], warped_img1[:, :3], wf0, wf1, timestep, mask, feat), dim=1),
+                    flow,
+                    scale=scale,
+                )
+                flow = flow + fd
+            warped_img0 = warp(img0, flow[:, :2])
+            warped_img1 = warp(img1, flow[:, 2:4])
+
         mask = torch.sigmoid(mask)
         return warped_img0 * mask + warped_img1 * (1 - mask)
 
 
 class Model:
-    """Wrapper matching the API expected by RIFEInterpolator.
-
-    Methods:
-        load_model(path, rank) — load flownet.pkl weights
-        eval() — set to eval mode
-        inference(img0, img1, timestep) — interpolate single frame
-    """
+    """Wrapper matching the API expected by RIFEInterpolator."""
 
     def __init__(self) -> None:
         self.flownet = IFNet()
         self.device = torch.device("cpu")
 
     def load_model(self, path: str, rank: int = 0) -> None:
-        """Load weights from flownet.pkl.
-
-        Args:
-            path: Directory containing flownet.pkl, or direct path to the .pkl file.
-            rank: Unused (kept for API compat). Pass -1 for CPU.
-        """
         p = Path(path)
         if p.is_dir():
             p = p / "flownet.pkl"
@@ -143,7 +175,6 @@ class Model:
         self.device = torch.device("cpu") if rank < 0 else torch.device("cuda")
 
         state = torch.load(p, map_location="cpu", weights_only=True)
-        # Handle keys with or without "module." prefix (DDP artifact)
         cleaned = {}
         for k, v in state.items():
             cleaned[k.replace("module.", "")] = v
@@ -161,18 +192,7 @@ class Model:
         timestep: float = 0.5,
         scale_list: list[int] | None = None,
     ) -> torch.Tensor:
-        """Interpolate between img0 and img1 at the given timestep.
-
-        Args:
-            img0: (B, 3, H, W) first frame tensor.
-            img1: (B, 3, H, W) second frame tensor.
-            timestep: Position between frames, 0.0=img0, 1.0=img1.
-            scale_list: Multi-scale factors (default [4,2,1]).
-
-        Returns:
-            (B, 3, H, W) interpolated frame tensor.
-        """
         imgs = torch.cat((img0, img1), dim=1)
         if scale_list is None:
-            scale_list = [4, 2, 1]
+            scale_list = [8, 4, 2, 1, 1]
         return self.flownet(imgs, timestep=timestep, scale_list=scale_list)
