@@ -12,6 +12,7 @@ from dreamstream.config import (
     Profile,
     ReceiverConfig,
     SenderConfig,
+    remux_to_h264,
     resolve_device,
 )
 
@@ -150,6 +151,10 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
     # Release all writers
     for w in [degraded_writer, reliable_writer, dream_writer, heatmap_writer, grid_writer]:
         w.release()
+
+    # Re-encode to H.264 for broad player compatibility
+    for name in ["degraded.mp4", "reliable.mp4", "dream.mp4", "heatmap.mp4", "stitched_grid.mp4"]:
+        remux_to_h264(cfg.out_dir / name)
 
     metrics = tracker.finalize(pipeline.model_status)
     metrics_path = cfg.out_dir / "metrics.json"

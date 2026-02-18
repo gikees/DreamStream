@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import enum
 import logging
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Tuple
@@ -108,3 +110,38 @@ def create_video_writer(
     raise RuntimeError(
         f"No working codec found for {path}. Tried: {FOURCC_CANDIDATES}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Post-processing: re-encode to H.264 if ffmpeg is available
+# ---------------------------------------------------------------------------
+
+def remux_to_h264(video_path: Path | str) -> None:
+    """Re-encode a video file to H.264 using ffmpeg (in-place).
+
+    If ffmpeg is not installed, logs a warning and leaves the file as-is.
+    """
+    video_path = Path(video_path)
+    if not video_path.exists():
+        return
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        logger.warning("ffmpeg not found — skipping H.264 re-encode for %s", video_path)
+        return
+
+    tmp_path = video_path.with_suffix(".tmp.mp4")
+    cmd = [
+        ffmpeg, "-y", "-i", str(video_path),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-movflags", "+faststart",
+        "-an",  # no audio
+        str(tmp_path),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+        tmp_path.replace(video_path)
+        logger.info("Re-encoded %s to H.264", video_path.name)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("H.264 re-encode failed for %s: %s", video_path.name, exc)
+        tmp_path.unlink(missing_ok=True)
