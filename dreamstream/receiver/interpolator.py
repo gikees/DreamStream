@@ -86,7 +86,8 @@ class RIFEInterpolator(Interpolator):
 
         self._device = device
         self._model = Model()
-        self._model.load_model(str(weights_path), -1)
+        rank = 0 if device.type == "cuda" else -1
+        self._model.load_model(str(weights_path), rank)
         self._model.eval()
         logger.info("RIFE loaded from %s", weights_path)
 
