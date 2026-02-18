@@ -95,17 +95,19 @@ class IFNet(nn.Module):
         # Timestep map: same spatial dims as input, filled with timestep value
         timestep_tensor = (x[:, :1].clone() * 0 + 1) * timestep
 
-        # Flow starts at zeros (all blocks expect 11 channels: img0+img1+timestep+flow)
+        # Flow and mask start at zeros — accumulated across blocks (coarse-to-fine)
         B, _, H, W = x.shape
         flow = torch.zeros(B, 4, H, W, device=x.device)
+        mask = torch.zeros(B, 1, H, W, device=x.device)
 
         blocks = [self.block0, self.block1, self.block2]
         for block, scale in zip(blocks, scale_list):
-            flow_d, mask = block(
+            flow_d, mask_d = block(
                 torch.cat((img0, img1, timestep_tensor, flow), dim=1),
                 scale=scale,
             )
             flow = flow + flow_d
+            mask = mask + mask_d
 
         # Final warp and blend using learned mask
         warped_img0 = warp(img0, flow[:, :2])

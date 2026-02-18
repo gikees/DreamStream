@@ -99,13 +99,19 @@ def create_video_writer(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    for codec in FOURCC_CANDIDATES:
-        fourcc = cv2.VideoWriter_fourcc(*codec)
-        writer = cv2.VideoWriter(str(path), fourcc, fps, frame_size)
-        if writer.isOpened():
-            logger.debug("VideoWriter opened with codec %s for %s", codec, path)
-            return writer
-        writer.release()
+    # Suppress FFmpeg [ERROR] spam during codec probing — the fallback is intentional
+    prev_log_level = cv2.utils.logging.getLogLevel()
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+    try:
+        for codec in FOURCC_CANDIDATES:
+            fourcc = cv2.VideoWriter_fourcc(*codec)
+            writer = cv2.VideoWriter(str(path), fourcc, fps, frame_size)
+            if writer.isOpened():
+                logger.debug("VideoWriter opened with codec %s for %s", codec, path)
+                return writer
+            writer.release()
+    finally:
+        cv2.utils.logging.setLogLevel(prev_log_level)
 
     raise RuntimeError(
         f"No working codec found for {path}. Tried: {FOURCC_CANDIDATES}"
