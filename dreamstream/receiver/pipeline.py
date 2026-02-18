@@ -1,9 +1,9 @@
-"""Main receiver pipeline: chains interpolator → upscaler → enhancer."""
+"""Main receiver pipeline: chains interpolator -> upscaler -> enhancer."""
 
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -23,9 +23,15 @@ logger = logging.getLogger(__name__)
 class ReconstructionPipeline:
     """Orchestrates frame interpolation, upscaling, and enhancement."""
 
-    def __init__(self, config: ReceiverConfig, device: torch.device) -> None:
+    def __init__(
+        self,
+        config: ReceiverConfig,
+        device: torch.device,
+        output_size: Tuple[int, int] = (1280, 720),
+    ) -> None:
         self._config = config
         self._device = device
+        self._output_size = output_size  # (width, height)
         self._prev_frame: np.ndarray | None = None
 
         # Model status tracking
@@ -37,7 +43,6 @@ class ReconstructionPipeline:
         self._enhancer = self._build_enhancer(config)
 
     def _build_interpolator(self, config: ReceiverConfig) -> Interpolator:
-        # Try optical flow first (CPU-only, always available)
         try:
             interp = OpticalFlowInterpolator()
             self.model_status["interpolator"] = "optical_flow"
@@ -49,13 +54,11 @@ class ReconstructionPipeline:
             return DuplicationInterpolator()
 
     def _build_upscaler(self, config: ReceiverConfig) -> Upscaler:
-        # Baseline bicubic — optional Real-ESRGAN would go here
         self.model_status["upscaler"] = "bicubic"
         logger.info("Upscaler: bicubic (baseline)")
         return BicubicUpscaler()
 
     def _build_enhancer(self, config: ReceiverConfig) -> Enhancer:
-        # Baseline passthrough — optional LCM diffusion would go here
         self.model_status["enhancer"] = "passthrough"
         logger.info("Enhancer: passthrough (baseline)")
         return PassthroughEnhancer()
@@ -63,7 +66,7 @@ class ReconstructionPipeline:
     @property
     def num_output_frames(self) -> int:
         """Number of output frames to generate per input frame."""
-        return max(1, round(self._config.output_fps / 3.0))  # sender is 3fps
+        return max(1, round(self._config.output_fps / 3.0))
 
     def get_reliable_frames(
         self, frame: np.ndarray, edges: np.ndarray | None = None
@@ -73,9 +76,8 @@ class ReconstructionPipeline:
             frame, self._prev_frame, self.num_output_frames
         )
         upscaled = [
-            self._upscaler.upscale(f, self._config.output_height) for f in interpolated
+            self._upscaler.upscale(f, self._output_size) for f in interpolated
         ]
-        # Update prev frame buffer
         self._prev_frame = frame
         return upscaled
 
@@ -88,7 +90,7 @@ class ReconstructionPipeline:
         )
         results = []
         for f in interpolated:
-            up = self._upscaler.upscale(f, self._config.output_height)
+            up = self._upscaler.upscale(f, self._output_size)
             enhanced = self._enhancer.enhance(up, edges=edges)
             results.append(enhanced)
         return results

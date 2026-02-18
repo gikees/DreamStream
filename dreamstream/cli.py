@@ -77,18 +77,18 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
         meta.width, meta.height, meta.fps, meta.frame_count,
     )
 
-    # Build receiver pipeline
-    pipeline = ReconstructionPipeline(cfg.receiver, cfg.device)
-    num_output = round(cfg.receiver.output_fps / cfg.sender.target_fps)
-
-    # Metrics tracker
-    tracker = MetricsTracker(cfg)
-
     # Compute output dimensions (maintain aspect ratio)
     aspect = meta.width / meta.height
     out_h = cfg.receiver.output_height
     out_w = int(out_h * aspect)
     out_w = out_w if out_w % 2 == 0 else out_w + 1
+
+    # Build receiver pipeline with explicit output size
+    pipeline = ReconstructionPipeline(cfg.receiver, cfg.device, output_size=(out_w, out_h))
+    num_output = round(cfg.receiver.output_fps / cfg.sender.target_fps)
+
+    # Metrics tracker
+    tracker = MetricsTracker(cfg)
 
     # Degraded dimensions
     deg_h = cfg.sender.target_height
