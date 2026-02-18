@@ -173,7 +173,7 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
 
 WEIGHT_URLS = {
     "RealESRGAN_x4.pth": "https://huggingface.co/ai-forever/Real-ESRGAN/resolve/main/RealESRGAN_x4.pth",
-    "rife/flownet.pkl": "https://huggingface.co/hzwer/Practical-RIFE/resolve/main/flownet.pkl",
+    "rife/flownet.pkl": "https://huggingface.co/jbilcke-hf/varnish/resolve/main/rife/flownet.pkl",
 }
 
 

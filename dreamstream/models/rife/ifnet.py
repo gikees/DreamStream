@@ -1,7 +1,9 @@
-"""IFNet_HDv3 — Practical-RIFE v4.x intermediate flow network (inference only).
+"""IFNet v4.6 — Practical-RIFE intermediate flow network (inference only).
 
-Vendored from https://github.com/hzwer/Practical-RIFE (ECCV2022).
-Adapted: no Contextnet/Unet refine, device-agnostic, no xformers/flash-attn.
+Vendored from https://github.com/hzwer/Practical-RIFE.
+Architecture matched to the public flownet.pkl weights (3 student blocks,
+uniform c=90, separate flow/mask deconv heads).
+Adapted: device-agnostic, no xformers/flash-attn, teacher block ignored.
 """
 
 from __future__ import annotations
@@ -30,53 +32,53 @@ def conv(in_planes: int, out_planes: int, kernel_size: int = 3, stride: int = 1,
 
 
 class IFBlock(nn.Module):
-    """Single scale block: estimates residual flow + mask at one resolution."""
+    """Single scale block with separate flow/mask deconv heads."""
 
     def __init__(self, in_planes: int, c: int = 64) -> None:
         super().__init__()
-        self.lastconv = nn.ConvTranspose2d(c, 5, 4, 2, 1)
         self.conv0 = nn.Sequential(
             conv(in_planes, c // 2, 3, 2, 1),
             conv(c // 2, c, 3, 2, 1),
         )
-        self.convblock = nn.Sequential(
-            conv(c, c),
-            conv(c, c),
-            conv(c, c),
-            conv(c, c),
-            conv(c, c),
-            conv(c, c),
-            conv(c, c),
-            conv(c, c),
+        self.convblock0 = nn.Sequential(conv(c, c), conv(c, c))
+        self.convblock1 = nn.Sequential(conv(c, c), conv(c, c))
+        self.convblock2 = nn.Sequential(conv(c, c), conv(c, c))
+        self.convblock3 = nn.Sequential(conv(c, c), conv(c, c))
+        self.conv1 = nn.Sequential(
+            nn.ConvTranspose2d(c, c // 2, 4, 2, 1),
+            nn.PReLU(c // 2),
+            nn.ConvTranspose2d(c // 2, 4, 4, 2, 1),
+        )
+        self.conv2 = nn.Sequential(
+            nn.ConvTranspose2d(c, c // 2, 4, 2, 1),
+            nn.PReLU(c // 2),
+            nn.ConvTranspose2d(c // 2, 1, 4, 2, 1),
         )
 
-    def forward(self, x: torch.Tensor, flow: torch.Tensor, scale: int) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, scale: int) -> tuple[torch.Tensor, torch.Tensor]:
         if scale != 1:
             x = F.interpolate(x, scale_factor=1.0 / scale, mode="bilinear", align_corners=False)
-        if flow is not None:
-            flow = (
-                F.interpolate(flow, scale_factor=1.0 / scale, mode="bilinear", align_corners=False)
-                * (1.0 / scale)
-            )
-            x = torch.cat((x, flow), dim=1)
         x = self.conv0(x)
-        x = self.convblock(x) + x
-        tmp = self.lastconv(x)
-        tmp = F.interpolate(tmp, scale_factor=scale * 2, mode="bilinear", align_corners=False)
-        flow = tmp[:, :4] * scale * 2
-        mask = tmp[:, 4:5]
+        x = self.convblock0(x) + x
+        x = self.convblock1(x) + x
+        x = self.convblock2(x) + x
+        x = self.convblock3(x) + x
+        flow = self.conv1(x)
+        mask = self.conv2(x)
+        flow = F.interpolate(flow, scale_factor=scale, mode="bilinear", align_corners=False) * scale
+        mask = F.interpolate(mask, scale_factor=scale, mode="bilinear", align_corners=False)
         return flow, mask
 
 
-class IFNet_HDv3(nn.Module):
-    """Multi-scale IFNet: 4 IFBlocks at decreasing channel widths."""
+class IFNet(nn.Module):
+    """Multi-scale IFNet: 3 student blocks + teacher (unused at inference)."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.block0 = IFBlock(7, c=192)
-        self.block1 = IFBlock(8 + 4, c=128)
-        self.block2 = IFBlock(8 + 4, c=96)
-        self.block3 = IFBlock(8 + 4, c=64)
+        self.block0 = IFBlock(7 + 4, c=90)
+        self.block1 = IFBlock(7 + 4, c=90)
+        self.block2 = IFBlock(7 + 4, c=90)
+        self.block_tea = IFBlock(10 + 4, c=90)
 
     def forward(
         self,
@@ -85,7 +87,7 @@ class IFNet_HDv3(nn.Module):
         scale_list: list[int] | None = None,
     ) -> torch.Tensor:
         if scale_list is None:
-            scale_list = [8, 4, 2, 1]
+            scale_list = [4, 2, 1]
 
         img0 = x[:, :3]
         img1 = x[:, 3:6]
@@ -93,29 +95,17 @@ class IFNet_HDv3(nn.Module):
         # Timestep map: same spatial dims as input, filled with timestep value
         timestep_tensor = (x[:, :1].clone() * 0 + 1) * timestep
 
-        flow = None
-        mask = None
-        blocks = [self.block0, self.block1, self.block2, self.block3]
+        # Flow starts at zeros (all blocks expect 11 channels: img0+img1+timestep+flow)
+        B, _, H, W = x.shape
+        flow = torch.zeros(B, 4, H, W, device=x.device)
 
+        blocks = [self.block0, self.block1, self.block2]
         for block, scale in zip(blocks, scale_list):
-            if flow is None:
-                # First block: raw images + timestep, no prior flow
-                flow, mask = block(
-                    torch.cat((img0, img1, timestep_tensor), dim=1),
-                    None,
-                    scale=scale,
-                )
-            else:
-                # Subsequent blocks: warped images + timestep + mask, residual on flow
-                warped_img0 = warp(img0, flow[:, :2])
-                warped_img1 = warp(img1, flow[:, 2:4])
-                flow_d, mask_d = block(
-                    torch.cat((warped_img0, warped_img1, timestep_tensor, mask), dim=1),
-                    flow,
-                    scale=scale,
-                )
-                flow = flow + flow_d
-                mask = mask + mask_d
+            flow_d, mask = block(
+                torch.cat((img0, img1, timestep_tensor, flow), dim=1),
+                scale=scale,
+            )
+            flow = flow + flow_d
 
         # Final warp and blend using learned mask
         warped_img0 = warp(img0, flow[:, :2])
@@ -134,7 +124,7 @@ class Model:
     """
 
     def __init__(self) -> None:
-        self.flownet = IFNet_HDv3()
+        self.flownet = IFNet()
         self.device = torch.device("cpu")
 
     def load_model(self, path: str, rank: int = 0) -> None:
@@ -175,12 +165,12 @@ class Model:
             img0: (B, 3, H, W) first frame tensor.
             img1: (B, 3, H, W) second frame tensor.
             timestep: Position between frames, 0.0=img0, 1.0=img1.
-            scale_list: Multi-scale factors (default [8,4,2,1]).
+            scale_list: Multi-scale factors (default [4,2,1]).
 
         Returns:
             (B, 3, H, W) interpolated frame tensor.
         """
         imgs = torch.cat((img0, img1), dim=1)
         if scale_list is None:
-            scale_list = [8, 4, 2, 1]
+            scale_list = [4, 2, 1]
         return self.flownet(imgs, timestep=timestep, scale_list=scale_list)
