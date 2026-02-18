@@ -14,8 +14,9 @@ from dreamstream.receiver.interpolator import (
     DuplicationInterpolator,
     Interpolator,
     OpticalFlowInterpolator,
+    RIFEInterpolator,
 )
-from dreamstream.receiver.upscaler import BicubicUpscaler, Upscaler
+from dreamstream.receiver.upscaler import BicubicUpscaler, RealESRGANUpscaler, Upscaler
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,22 @@ class ReconstructionPipeline:
 
         # Build components with graceful fallback
         self._interpolator = self._build_interpolator(config)
-        self._upscaler = self._build_upscaler(config)
+        self._reliable_upscaler = self._build_reliable_upscaler(config)
+        self._dream_upscaler = self._build_dream_upscaler(config)
         self._enhancer = self._build_enhancer(config)
 
     def _build_interpolator(self, config: ReceiverConfig) -> Interpolator:
+        # Try RIFE first (AI interpolation)
+        weights_path = config.weights_dir / "flownet.pkl"
+        try:
+            interp = RIFEInterpolator(weights_path, self._device)
+            self.model_status["interpolator"] = "rife"
+            logger.info("Interpolator: RIFE (AI)")
+            return interp
+        except Exception as e:
+            logger.info("RIFE unavailable (%s), trying optical flow", e)
+
+        # Fall back to optical flow
         try:
             interp = OpticalFlowInterpolator()
             self.model_status["interpolator"] = "optical_flow"
@@ -53,10 +66,21 @@ class ReconstructionPipeline:
             logger.info("Interpolator: frame duplication (baseline)")
             return DuplicationInterpolator()
 
-    def _build_upscaler(self, config: ReceiverConfig) -> Upscaler:
-        self.model_status["upscaler"] = "bicubic"
-        logger.info("Upscaler: bicubic (baseline)")
+    def _build_reliable_upscaler(self, config: ReceiverConfig) -> Upscaler:
+        self.model_status["reliable_upscaler"] = "bicubic"
+        logger.info("Reliable upscaler: bicubic")
         return BicubicUpscaler()
+
+    def _build_dream_upscaler(self, config: ReceiverConfig) -> Upscaler:
+        weights_path = config.weights_dir / "RealESRGAN_x4.pth"
+        try:
+            upscaler = RealESRGANUpscaler(weights_path, self._device)
+            self.model_status["dream_upscaler"] = "real_esrgan_x4"
+            return upscaler
+        except Exception as e:
+            logger.warning("Real-ESRGAN unavailable (%s), falling back to bicubic", e)
+            self.model_status["dream_upscaler"] = "bicubic"
+            return BicubicUpscaler()
 
     def _build_enhancer(self, config: ReceiverConfig) -> Enhancer:
         self.model_status["enhancer"] = "passthrough"
@@ -68,29 +92,27 @@ class ReconstructionPipeline:
         """Number of output frames to generate per input frame."""
         return max(1, round(self._config.output_fps / 3.0))
 
-    def get_reliable_frames(
+    def process_frame(
         self, frame: np.ndarray, edges: np.ndarray | None = None
-    ) -> List[np.ndarray]:
-        """Interpolate + upscale (no enhancement)."""
-        interpolated = self._interpolator.interpolate(
-            frame, self._prev_frame, self.num_output_frames
-        )
-        upscaled = [
-            self._upscaler.upscale(f, self._output_size) for f in interpolated
-        ]
-        self._prev_frame = frame
-        return upscaled
+    ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+        """Interpolate once, then fork into reliable and dream paths.
 
-    def get_dream_frames(
-        self, frame: np.ndarray, edges: np.ndarray | None = None
-    ) -> List[np.ndarray]:
-        """Interpolate + upscale + enhance."""
+        Returns (reliable_frames, dream_frames). Fixes the prev_frame bug
+        where separate calls would see stale/updated state inconsistently.
+        """
         interpolated = self._interpolator.interpolate(
             frame, self._prev_frame, self.num_output_frames
         )
-        results = []
+        self._prev_frame = frame
+
+        reliable = [
+            self._reliable_upscaler.upscale(f, self._output_size) for f in interpolated
+        ]
+
+        dream = []
         for f in interpolated:
-            up = self._upscaler.upscale(f, self._output_size)
+            up = self._dream_upscaler.upscale(f, self._output_size)
             enhanced = self._enhancer.enhance(up, edges=edges)
-            results.append(enhanced)
-        return results
+            dream.append(enhanced)
+
+        return reliable, dream

@@ -46,6 +46,13 @@ def _build_parser() -> argparse.ArgumentParser:
     ui_p.add_argument("--share", action="store_true", help="Create a public Gradio link")
     ui_p.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
 
+    # --- download-weights ---
+    dl_p = sub.add_parser("download-weights", help="Download optional AI model weights")
+    dl_p.add_argument(
+        "--weights-dir", default=Path("weights"), type=Path, help="Weights directory"
+    )
+    dl_p.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
+
     return parser
 
 
@@ -126,8 +133,7 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
                 deg_frame, cfg.sender.canny_low, cfg.sender.canny_high
             )
 
-        reliable_frames = pipeline.get_reliable_frames(deg_frame, edges)
-        dream_frames = pipeline.get_dream_frames(deg_frame, edges)
+        reliable_frames, dream_frames = pipeline.process_frame(deg_frame, edges)
 
         # Write degraded (1 frame per source frame at sender fps)
         degraded_writer.write(deg_frame)
@@ -165,6 +171,27 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
     return metrics.to_dict()
 
 
+WEIGHT_URLS = {
+    "RealESRGAN_x4.pth": "https://huggingface.co/ai-forever/Real-ESRGAN/resolve/main/RealESRGAN_x4.pth",
+}
+
+
+def _download_weights(weights_dir: Path) -> None:
+    """Download optional AI model weights to weights_dir."""
+    import urllib.request
+
+    weights_dir.mkdir(parents=True, exist_ok=True)
+
+    for filename, url in WEIGHT_URLS.items():
+        dest = weights_dir / filename
+        if dest.exists():
+            logger.info("Already exists: %s", dest)
+            continue
+        logger.info("Downloading %s → %s", url, dest)
+        urllib.request.urlretrieve(url, dest)
+        logger.info("Downloaded %s (%.1f MB)", filename, dest.stat().st_size / 1e6)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -192,6 +219,9 @@ def main(argv: list[str] | None = None) -> None:
             out_dir=args.out_dir,
         )
         _run_pipeline(cfg, input_path)
+
+    elif args.command == "download-weights":
+        _download_weights(args.weights_dir)
 
     elif args.command == "ui":
         from dreamstream.ui.app import create_app
