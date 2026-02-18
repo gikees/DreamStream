@@ -119,23 +119,43 @@ class RIFEInterpolator(Interpolator):
         if prev_frame is None:
             return [frame] * num_output_frames
 
+        N = num_output_frames  # slots 0..N-1; slot N-1 is the current frame
+
         img0 = self._to_tensor(prev_frame)
         img1 = self._to_tensor(frame)
 
-        # Pad to multiple of 32 for RIFE
         img0_p, orig_h, orig_w = self._pad_to_multiple(img0)
         img1_p, _, _ = self._pad_to_multiple(img1)
 
-        # Generate evenly-spaced timestamps excluding 0 (prev) including 1 (current)
-        timestamps = [(i + 1) / num_output_frames for i in range(num_output_frames)]
-        results: List[np.ndarray] = []
+        # Padded tensors for boundary frames (never run RIFE on these)
+        # slot index 0 maps to prev_frame, slot index N maps to frame
+        slots: dict[int, torch.Tensor] = {0: img0_p, N: img1_p}
 
-        for t in timestamps:
-            if abs(t - 1.0) < 1e-6:
+        # BFS binary midpoint splitting — always interpolate at t=0.5
+        # Each queue entry is (lo, hi) where lo and hi are slot indices
+        # with known tensors. We fill the midpoint slot.
+        queue = [(0, N)]
+        while queue:
+            next_queue = []
+            for lo, hi in queue:
+                if hi - lo <= 1:
+                    continue
+                mid_idx = (lo + hi) // 2
+                mid_tensor = self._model.inference(
+                    slots[lo], slots[hi], timestep=0.5
+                )
+                slots[mid_idx] = mid_tensor
+                next_queue.append((lo, mid_idx))
+                next_queue.append((mid_idx, hi))
+            queue = next_queue
+
+        # Collect output slots 1..N in order
+        results: List[np.ndarray] = []
+        for i in range(1, N + 1):
+            if i == N:
                 results.append(frame)
             else:
-                mid = self._model.inference(img0_p, img1_p, timestep=t)
-                mid = mid[:, :, :orig_h, :orig_w]
-                results.append(self._to_numpy(mid))
+                t = slots[i][:, :, :orig_h, :orig_w]
+                results.append(self._to_numpy(t))
 
         return results
