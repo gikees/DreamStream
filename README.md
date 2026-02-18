@@ -1,75 +1,56 @@
 # DreamStream
 
-Bandwidth-resilient generative video reconstruction pipeline for NVIDIA GB10 (Grace Blackwell).
+AI-powered video enhancement pipeline for NVIDIA GB10 (Grace Blackwell).
 
-The **sender** degrades video to ultra-low-bandwidth structure hints (240p @ 3fps), and the **receiver** reconstructs smooth, interpretable video (720p @ 24fps) using only local inference.
+Takes low-quality, low-framerate, or low-resolution video and enhances it into high-fidelity, high-framerate footage using local AI models (RIFE interpolation, Real-ESRGAN upscaling).
 
 ## Architecture
 
 ```
-Source Video → [Sender Sim] → 240p@3fps hints → [Receiver Pipeline] → 720p@24fps outputs
-                                                        │
-                              ┌──────────────────────────┼──────────────────────┐
-                              ▼                          ▼                      ▼
-                        Interpolate               Upscale (bicubic)      Enhance (optional)
-                     (frame dup/flow)                                    (diffusion/SR)
-                              │                          │                      │
-                              └──────────┬───────────────┘                      │
-                                         ▼                                      ▼
-                                   Reliable View                          Dream View
-                                         │                                      │
-                                         ├──────────────────────────────────────┘
-                                         ▼
-                              [Heatmap + 2x2 Grid Composer] → stitched_grid.mp4
+Input Video → [Enhancement Pipeline] → Enhanced Output
+                     │
+     ┌───────────────┼───────────────┐
+     ▼               ▼               ▼
+ Interpolate       Upscale        Enhance
+ (RIFE/flow)    (ESRGAN/bicubic)  (optional)
+     │               │               │
+     └───────┬───────┘               │
+             ├───────────────────────┘
+             ▼
+   enhanced.mp4 + comparison.mp4
 ```
 
 ## Quick Start
 
 ```bash
 # Install dependencies
-pip install -r requirements.txt
+pip install -e .
 
-# Process a video via CLI
-python -m dreamstream run -i input.mp4 -p low_rgb -v
+# Download optional AI model weights
+python -m dreamstream download-weights
+
+# Enhance a video via CLI
+python -m dreamstream run -i input.mp4 -v
 
 # Launch the Gradio web UI
 python -m dreamstream ui
 ```
 
-## Profiles
-
-| Profile | Sender Output | Description |
-|---------|--------------|-------------|
-| `low_rgb` | 240p RGB @ 3fps | Spatially + temporally degraded color frames |
-| `low_rgb_edges` | 240p RGB @ 3fps + Canny edges | Adds edge structure hints for uncertainty mapping |
-
 ## Output Files
 
-The pipeline produces 6 files in the output directory:
+The pipeline produces 3 files in the output directory:
 
-| File | Resolution | FPS | Description |
-|------|-----------|-----|-------------|
-| `degraded.mp4` | 240p | 3 | Sender output (what gets transmitted) |
-| `reliable.mp4` | 720p | 24 | Interpolated + upscaled (no AI enhancement) |
-| `dream.mp4` | 720p | 24 | Interpolated + upscaled + enhanced (AI-generated) |
-| `heatmap.mp4` | 720p | 24 | Uncertainty visualization (warm = more hallucinated) |
-| `stitched_grid.mp4` | 1280x720 | 24 | 2x2 grid of all four views with labels |
-| `metrics.json` | — | — | Pipeline metrics (kbps, latency, models used) |
-
-## Reliable vs Dream
-
-- **Reliable view**: Only uses deterministic operations (optical flow interpolation, bicubic upscaling). What you see is a faithful reconstruction of the transmitted data.
-- **Dream view**: Applies optional AI enhancement (super-resolution, diffusion refinement). Looks better but may hallucinate details not present in the source.
-- **Heatmap**: Shows where the dream view is most uncertain — pixels far from detected edges are more likely to be hallucinated.
+| File | Description |
+|------|-------------|
+| `enhanced.mp4` | AI-enhanced output (interpolated + upscaled) |
+| `comparison.mp4` | Side-by-side: Input (naive upscale) vs Enhanced (AI) |
+| `metrics.json` | Pipeline metrics (latency, FPS, models used) |
 
 ## CLI Reference
 
 ```bash
 # Full options
 python -m dreamstream run --help
-
-# Process with edge hints
-python -m dreamstream run -i input.mp4 -p low_rgb_edges -o my_outputs/ -v
 
 # Custom output resolution and FPS
 python -m dreamstream run -i input.mp4 --output-height 480 --output-fps 15
@@ -80,12 +61,17 @@ python -m dreamstream ui --share
 
 ## Optional Models
 
-Place model weights in the `weights/` directory for enhanced reconstruction:
+Download weights with `python -m dreamstream download-weights`, or place them manually:
 
-| Model | Directory | Effect |
-|-------|----------|--------|
-| RIFE | `weights/rife/` | Temporal interpolation (replaces optical flow) |
-| Real-ESRGAN | `weights/realesrgan/` | 4x super-resolution (replaces bicubic) |
-| LCM Diffusion | `weights/lcm/` | Generative enhancement (replaces passthrough) |
+| Model | Path | Effect |
+|-------|------|--------|
+| RIFE v4.26 | `weights/rife/flownet.pkl` | AI temporal interpolation (replaces optical flow) |
+| Real-ESRGAN x4 | `weights/RealESRGAN_x4.pth` | AI super-resolution (replaces bicubic) |
 
 All models are optional — the pipeline gracefully degrades to baseline algorithms when weights are missing.
+
+## Fallback Chains
+
+- **Interpolation**: RIFE → Optical Flow (Farneback) → Frame Duplication
+- **Upscaling**: Real-ESRGAN x4 → Bicubic
+- **Enhancement**: Passthrough (placeholder for future ControlNet/LCM)

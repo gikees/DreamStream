@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dreamstream"
 version = "0.1.0"
-description = "Bandwidth-resilient generative video reconstruction pipeline for NVIDIA GB10"
+description = "AI-powered video enhancement pipeline for NVIDIA GB10"
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.1.0",
