@@ -1,8 +1,7 @@
-"""Central configuration: profiles, dataclasses, device setup, video writer utility."""
+"""Central configuration: dataclasses, device setup, video writer utility."""
 
 from __future__ import annotations
 
-import enum
 import logging
 import shutil
 import subprocess
@@ -15,26 +14,10 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Profiles
-# ---------------------------------------------------------------------------
-
-class Profile(enum.Enum):
-    LOW_RGB = "low_rgb"
-    LOW_RGB_EDGES = "low_rgb_edges"
-
 
 # ---------------------------------------------------------------------------
 # Config dataclasses
 # ---------------------------------------------------------------------------
-
-@dataclass
-class SenderConfig:
-    target_height: int = 240
-    target_fps: float = 3.0
-    canny_low: int = 50
-    canny_high: int = 150
-
 
 @dataclass
 class ReceiverConfig:
@@ -45,9 +28,7 @@ class ReceiverConfig:
 
 @dataclass
 class PipelineConfig:
-    sender: SenderConfig = field(default_factory=SenderConfig)
     receiver: ReceiverConfig = field(default_factory=ReceiverConfig)
-    profile: Profile = Profile.LOW_RGB
     device: torch.device = field(default_factory=lambda: torch.device("cpu"))
     out_dir: Path = field(default_factory=lambda: Path("outputs"))
 

@@ -1,4 +1,4 @@
-"""2x2 grid stitcher with labels for visualization output."""
+"""Side-by-side comparison composer for visualization output."""
 
 from __future__ import annotations
 
@@ -8,54 +8,33 @@ import cv2
 import numpy as np
 
 
-def compose_grid(
-    degraded: np.ndarray,
-    reliable: np.ndarray,
-    dream: np.ndarray,
-    heatmap: np.ndarray,
-    cell_size: Tuple[int, int] = (640, 360),
+def compose_comparison(
+    original: np.ndarray,
+    enhanced: np.ndarray,
+    cell_size: Tuple[int, int] = (640, 720),
 ) -> np.ndarray:
-    """Compose a 2x2 grid from four video frames with labels.
+    """Compose a 1x2 side-by-side comparison frame.
 
     Layout:
-        [Degraded (240p@3fps)] [Reliable]
-        [Dream]                [Uncertainty]
+        [Input] [Enhanced]
 
     Args:
-        degraded: BGR frame (low-res input).
-        reliable: BGR frame (upscaled, no enhancement).
-        dream: BGR frame (upscaled + enhanced).
-        heatmap: BGR heatmap frame.
-        cell_size: (width, height) per cell. Default (640,360) → 1280x720 grid.
+        original: BGR frame (naive upscale of input).
+        enhanced: BGR frame (AI-enhanced output).
+        cell_size: (width, height) per cell. Default (640,720) -> 1280x720 total.
 
     Returns:
-        BGR frame of shape (cell_size[1]*2, cell_size[0]*2, 3).
+        BGR frame of shape (cell_size[1], cell_size[0]*2, 3).
     """
     cw, ch = cell_size
 
-    # Resize each to cell size with appropriate interpolation
-    deg_cell = cv2.resize(degraded, (cw, ch), interpolation=cv2.INTER_NEAREST)
-    rel_cell = cv2.resize(reliable, (cw, ch), interpolation=cv2.INTER_CUBIC)
-    drm_cell = cv2.resize(dream, (cw, ch), interpolation=cv2.INTER_CUBIC)
-    hm_cell = cv2.resize(heatmap, (cw, ch), interpolation=cv2.INTER_CUBIC)
+    orig_cell = cv2.resize(original, (cw, ch), interpolation=cv2.INTER_CUBIC)
+    enh_cell = cv2.resize(enhanced, (cw, ch), interpolation=cv2.INTER_CUBIC)
 
-    # Draw labels
-    labels = [
-        (deg_cell, "Degraded (240p@3fps)"),
-        (rel_cell, "Reliable"),
-        (drm_cell, "Dream"),
-        (hm_cell, "Uncertainty"),
-    ]
+    _draw_label(orig_cell, "Input")
+    _draw_label(enh_cell, "Enhanced")
 
-    for cell, label in labels:
-        _draw_label(cell, label)
-
-    # Stitch: top row, bottom row, then vstack
-    top = np.hstack([deg_cell, rel_cell])
-    bottom = np.hstack([drm_cell, hm_cell])
-    grid = np.vstack([top, bottom])
-
-    return grid
+    return np.hstack([orig_cell, enh_cell])
 
 
 def _draw_label(frame: np.ndarray, text: str) -> None:

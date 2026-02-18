@@ -1,5 +1,5 @@
-"""Receiver — reconstructs high-quality video from degraded hints."""
+"""Receiver — enhances video using AI models with graceful fallback."""
 
-from dreamstream.receiver.pipeline import ReconstructionPipeline
+from dreamstream.receiver.pipeline import EnhancementPipeline
 
-__all__ = ["ReconstructionPipeline"]
+__all__ = ["EnhancementPipeline"]

@@ -9,9 +9,7 @@ from pathlib import Path
 
 from dreamstream.config import (
     PipelineConfig,
-    Profile,
     ReceiverConfig,
-    SenderConfig,
     remux_to_h264,
     resolve_device,
 )
@@ -22,23 +20,16 @@ logger = logging.getLogger(__name__)
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dreamstream",
-        description="DreamStream — bandwidth-resilient generative video reconstruction",
+        description="DreamStream — AI-powered video enhancement",
     )
     sub = parser.add_subparsers(dest="command")
 
     # --- run ---
-    run_p = sub.add_parser("run", help="Process a video through the pipeline")
+    run_p = sub.add_parser("run", help="Enhance a video through the AI pipeline")
     run_p.add_argument("-i", "--input", required=True, type=Path, help="Input video path")
-    run_p.add_argument(
-        "-p",
-        "--profile",
-        default="low_rgb",
-        choices=[p.value for p in Profile],
-        help="Sender profile (default: low_rgb)",
-    )
     run_p.add_argument("-o", "--out-dir", default=Path("outputs"), type=Path, help="Output directory")
-    run_p.add_argument("--output-height", default=720, type=int, help="Receiver output height (default: 720)")
-    run_p.add_argument("--output-fps", default=24.0, type=float, help="Receiver output FPS (default: 24)")
+    run_p.add_argument("--output-height", default=720, type=int, help="Output height (default: 720)")
+    run_p.add_argument("--output-fps", default=24.0, type=float, help="Output FPS (default: 24)")
     run_p.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
 
     # --- ui ---
@@ -66,17 +57,17 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
-    """Execute the full sender→receiver→viz pipeline.
+    """Execute the enhancement pipeline on an input video.
 
     Returns a metrics dict.
     """
-    from dreamstream.metrics.tracker import MetricsTracker
-    from dreamstream.receiver.pipeline import ReconstructionPipeline
-    from dreamstream.sender_sim.degrader import degrade_video, probe_video
-    from dreamstream.sender_sim.hints import compute_canny_edges, edges_to_rgb
-    from dreamstream.viz.composer import compose_grid
-    from dreamstream.viz.heatmap import generate_heatmap
+    import cv2
+
     from dreamstream.config import create_video_writer
+    from dreamstream.metrics.tracker import MetricsTracker
+    from dreamstream.receiver.pipeline import EnhancementPipeline
+    from dreamstream.video_io import probe_video, read_frames
+    from dreamstream.viz.composer import compose_comparison
 
     # Probe source video
     meta = probe_video(input_path)
@@ -91,82 +82,63 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
     out_w = int(out_h * aspect)
     out_w = out_w if out_w % 2 == 0 else out_w + 1
 
-    # Build receiver pipeline with explicit output size
-    pipeline = ReconstructionPipeline(cfg.receiver, cfg.device, output_size=(out_w, out_h))
-    num_output = round(cfg.receiver.output_fps / cfg.sender.target_fps)
+    # Build enhancement pipeline
+    pipeline = EnhancementPipeline(
+        cfg.receiver, cfg.device, input_fps=meta.fps, output_size=(out_w, out_h)
+    )
 
     # Metrics tracker
-    tracker = MetricsTracker(cfg)
+    tracker = MetricsTracker(
+        output_fps=cfg.receiver.output_fps, source_fps=meta.fps
+    )
 
-    # Degraded dimensions
-    deg_h = cfg.sender.target_height
-    deg_w = int(deg_h * aspect)
-    deg_w = deg_w if deg_w % 2 == 0 else deg_w + 1
-
-    # Grid dimensions: 2x2 of 640x360 cells = 1280x720
-    grid_w, grid_h = 1280, 720
+    # Comparison grid dimensions: 1x2 of 640x720 cells = 1280x720
+    comp_cell_w, comp_cell_h = 640, out_h
+    comp_w = comp_cell_w * 2
 
     # Create video writers
-    degraded_writer = create_video_writer(
-        cfg.out_dir / "degraded.mp4", cfg.sender.target_fps, (deg_w, deg_h)
+    enhanced_writer = create_video_writer(
+        cfg.out_dir / "enhanced.mp4", cfg.receiver.output_fps, (out_w, out_h)
     )
-    reliable_writer = create_video_writer(
-        cfg.out_dir / "reliable.mp4", cfg.receiver.output_fps, (out_w, out_h)
-    )
-    dream_writer = create_video_writer(
-        cfg.out_dir / "dream.mp4", cfg.receiver.output_fps, (out_w, out_h)
-    )
-    heatmap_writer = create_video_writer(
-        cfg.out_dir / "heatmap.mp4", cfg.receiver.output_fps, (out_w, out_h)
-    )
-    grid_writer = create_video_writer(
-        cfg.out_dir / "stitched_grid.mp4", cfg.receiver.output_fps, (grid_w, grid_h)
+    comparison_writer = create_video_writer(
+        cfg.out_dir / "comparison.mp4", cfg.receiver.output_fps, (comp_w, comp_cell_h)
     )
 
     tracker.start(source_resolution=f"{meta.width}x{meta.height}")
     frame_idx = 0
 
-    for deg_frame, orig_idx in degrade_video(input_path, cfg.sender):
-        edges = None
-        if cfg.profile == Profile.LOW_RGB_EDGES:
-            edges = compute_canny_edges(
-                deg_frame, cfg.sender.canny_low, cfg.sender.canny_high
+    for frame in read_frames(input_path):
+        enhanced_frames = pipeline.process_frame(frame)
+
+        # Naive upscale of input frame for comparison panel
+        naive_upscaled = cv2.resize(frame, (out_w, out_h), interpolation=cv2.INTER_CUBIC)
+
+        for enh_f in enhanced_frames:
+            enhanced_writer.write(enh_f)
+            comp = compose_comparison(
+                naive_upscaled, enh_f, cell_size=(comp_cell_w, comp_cell_h)
             )
+            comparison_writer.write(comp)
 
-        reliable_frames, dream_frames = pipeline.process_frame(deg_frame, edges)
-
-        # Write degraded (1 frame per source frame at sender fps)
-        degraded_writer.write(deg_frame)
-
-        # Write reliable + dream + heatmap + grid (num_output frames per source frame)
-        for i, (rel_f, drm_f) in enumerate(zip(reliable_frames, dream_frames)):
-            reliable_writer.write(rel_f)
-            dream_writer.write(drm_f)
-
-            # Heatmap based on dream frame
-            hmap = generate_heatmap(drm_f, edges=edges)
-            heatmap_writer.write(hmap)
-
-            # Compose grid
-            grid = compose_grid(deg_frame.copy(), rel_f.copy(), drm_f.copy(), hmap.copy())
-            grid_writer.write(grid)
-
-        tracker.record_frame(deg_frame, reliable_frames, dream_frames)
+        tracker.record_frame(enhanced_frames)
         frame_idx += 1
 
-    # Release all writers
-    for w in [degraded_writer, reliable_writer, dream_writer, heatmap_writer, grid_writer]:
-        w.release()
+    # Release writers
+    enhanced_writer.release()
+    comparison_writer.release()
 
     # Re-encode to H.264 for broad player compatibility
-    for name in ["degraded.mp4", "reliable.mp4", "dream.mp4", "heatmap.mp4", "stitched_grid.mp4"]:
+    for name in ["enhanced.mp4", "comparison.mp4"]:
         remux_to_h264(cfg.out_dir / name)
 
     metrics = tracker.finalize(pipeline.model_status)
     metrics_path = cfg.out_dir / "metrics.json"
     metrics.to_json(metrics_path)
     logger.info("Metrics written to %s", metrics_path)
-    logger.info("Processed %d degraded frames → %d output frames", frame_idx, frame_idx * num_output)
+    logger.info(
+        "Processed %d input frames → %d output frames",
+        frame_idx, frame_idx * pipeline.num_output_frames,
+    )
 
     return metrics.to_dict()
 
@@ -246,12 +218,10 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
 
         cfg = PipelineConfig(
-            sender=SenderConfig(),
             receiver=ReceiverConfig(
                 output_height=args.output_height,
                 output_fps=args.output_fps,
             ),
-            profile=Profile(args.profile),
             device=resolve_device(),
             out_dir=args.out_dir,
         )
