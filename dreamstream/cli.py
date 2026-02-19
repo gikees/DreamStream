@@ -160,7 +160,7 @@ GDRIVE_WEIGHTS = {
 
 
 def _download_sd_model() -> None:
-    """Pre-download SD 1.5 model to HuggingFace cache."""
+    """Pre-download SD 1.5 and ControlNet Canny models to HuggingFace cache."""
     try:
         import torch
         from diffusers import AutoPipelineForImage2Image
@@ -174,6 +174,18 @@ def _download_sd_model() -> None:
         logger.info("SD 1.5 model cached successfully")
     except Exception as e:
         logger.warning("SD 1.5 download failed (non-fatal): %s", e)
+
+    try:
+        import torch
+        from diffusers import ControlNetModel
+        logger.info("Downloading ControlNet Canny model to HuggingFace cache...")
+        ControlNetModel.from_pretrained(
+            "lllyasviel/sd-controlnet-canny",
+            torch_dtype=torch.float16,
+        )
+        logger.info("ControlNet Canny model cached successfully")
+    except Exception as e:
+        logger.warning("ControlNet Canny download failed (non-fatal): %s", e)
 
 
 def _download_weights(weights_dir: Path) -> None:

@@ -31,6 +31,7 @@ class StagesConfig:
     enhancer_prompt: str = "high quality, sharp, detailed"
     enhancer_negative_prompt: str = "blurry, noisy, artifacts, low quality"
     enhancer_guidance_scale: float = 7.5
+    controlnet_model_id: str = "lllyasviel/sd-controlnet-canny"
 
 
 @dataclass

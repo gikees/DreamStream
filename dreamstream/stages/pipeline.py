@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Tuple
 
+import cv2
 import numpy as np
 import torch
 
@@ -108,9 +109,14 @@ class EnhancementPipeline:
                 prompt=config.enhancer_prompt,
                 negative_prompt=config.enhancer_negative_prompt,
                 guidance_scale=config.enhancer_guidance_scale,
+                controlnet_model_id=config.controlnet_model_id,
             )
-            self.model_status["enhancer"] = "sd_img2img"
-            logger.info("Enhancer: SD img2img (AI)")
+            if enhancer._has_controlnet:
+                self.model_status["enhancer"] = "sd_img2img_controlnet"
+                logger.info("Enhancer: SD img2img + ControlNet Canny (AI)")
+            else:
+                self.model_status["enhancer"] = "sd_img2img"
+                logger.info("Enhancer: SD img2img (AI)")
             return enhancer
         except Exception as e:
             logger.warning("SD img2img unavailable (%s), falling back to passthrough", e)
@@ -138,7 +144,11 @@ class EnhancementPipeline:
         results = []
         for f in interpolated:
             up = self._upscaler.upscale(f, self._output_size)
-            enhanced = self._enhancer.enhance(up)
+            edges = cv2.Canny(
+                cv2.GaussianBlur(cv2.cvtColor(up, cv2.COLOR_BGR2GRAY), (5, 5), 0),
+                50, 150,
+            )
+            enhanced = self._enhancer.enhance(up, edges=edges)
             results.append(enhanced)
 
         return results

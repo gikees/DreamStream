@@ -54,7 +54,7 @@ Takes low-quality, low-framerate, or low-resolution video and enhances it into h
 Each pipeline component tries AI models first, then falls back to baselines:
 - **Interpolation**: RIFE → Optical Flow (Farneback) → Frame Duplication
 - **Upscaling**: Real-ESRGAN x4 → Bicubic
-- **Enhancement**: SD img2img (diffusers) → Passthrough
+- **Enhancement**: SD img2img + ControlNet Canny → SD img2img → Passthrough
 
 ## Weight Management
 - Weight paths: `weights/RealESRGAN_x4.pth`, `weights/rife/flownet.pkl`
