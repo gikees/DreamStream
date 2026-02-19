@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ReceiverConfig:
     output_height: int = 720
-    output_fps: float = 24.0
+    output_fps: float | None = None  # None = match input FPS
     weights_dir: Path = field(default_factory=lambda: Path("weights"))
 
 

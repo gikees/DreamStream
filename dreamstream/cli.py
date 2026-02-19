@@ -29,7 +29,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("-i", "--input", required=True, type=Path, help="Input video path")
     run_p.add_argument("-o", "--out-dir", default=Path("outputs"), type=Path, help="Output directory")
     run_p.add_argument("--output-height", default=720, type=int, help="Output height (default: 720)")
-    run_p.add_argument("--output-fps", default=24.0, type=float, help="Output FPS (default: 24)")
+    run_p.add_argument("--output-fps", default=None, type=float, help="Output FPS (default: match input)")
     run_p.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
 
     # --- ui ---
@@ -75,6 +75,11 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
         "Source: %dx%d @ %.1f fps, %d frames",
         meta.width, meta.height, meta.fps, meta.frame_count,
     )
+
+    # Resolve output FPS: default to input FPS (enhance, don't interpolate)
+    if cfg.receiver.output_fps is None:
+        cfg.receiver.output_fps = meta.fps
+        logger.info("Output FPS: %.1f (matching input)", meta.fps)
 
     # Compute output dimensions (maintain aspect ratio)
     aspect = meta.width / meta.height
