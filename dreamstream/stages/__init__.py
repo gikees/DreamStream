@@ -1,5 +1,5 @@
-"""Receiver — enhances video using AI models with graceful fallback."""
+"""Stages — enhances video using AI models with graceful fallback."""
 
-from dreamstream.receiver.pipeline import EnhancementPipeline
+from dreamstream.stages.pipeline import EnhancementPipeline
 
 __all__ = ["EnhancementPipeline"]

@@ -10,7 +10,7 @@ import gradio as gr
 
 from dreamstream.config import (
     PipelineConfig,
-    ReceiverConfig,
+    StagesConfig,
     resolve_device,
 )
 
@@ -27,7 +27,7 @@ def _process_video(video_path: str) -> tuple[str | None, dict | None]:
     tmp_dir = Path(tempfile.mkdtemp(prefix="dreamstream_"))
 
     cfg = PipelineConfig(
-        receiver=ReceiverConfig(),
+        stages=StagesConfig(),
         device=resolve_device(),
         out_dir=tmp_dir,
     )
