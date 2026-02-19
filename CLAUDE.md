@@ -11,7 +11,7 @@ Takes low-quality, low-framerate, or low-resolution video and enhances it into h
 - Python 3.10+.
 
 ## Architecture Rules
-- Modular structure: receiver/, viz/, metrics/, ui/, models/. Keep modules independent.
+- Modular structure: stages/, viz/, metrics/, ui/, models/. Keep modules independent.
 - The pipeline runs sequentially: Interpolate -> Upscale -> Enhance.
 - Single enhancement path (no reliable/dream split) — use best available models.
 - The pipeline must ALWAYS work without optional weights (graceful degradation).
@@ -54,7 +54,7 @@ Takes low-quality, low-framerate, or low-resolution video and enhances it into h
 Each pipeline component tries AI models first, then falls back to baselines:
 - **Interpolation**: RIFE → Optical Flow (Farneback) → Frame Duplication
 - **Upscaling**: Real-ESRGAN x4 → Bicubic
-- **Enhancement**: Passthrough (ControlNet/LCM placeholder for future)
+- **Enhancement**: SD img2img (diffusers) → Passthrough
 
 ## Weight Management
 - Weight paths: `weights/RealESRGAN_x4.pth`, `weights/rife/flownet.pkl`

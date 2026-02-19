@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dreamstream.config import (
     PipelineConfig,
-    ReceiverConfig,
+    StagesConfig,
     remux_to_h264,
     resolve_device,
 )
@@ -65,7 +65,7 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
 
     from dreamstream.config import create_video_writer
     from dreamstream.metrics.tracker import MetricsTracker
-    from dreamstream.receiver.pipeline import EnhancementPipeline
+    from dreamstream.stages.pipeline import EnhancementPipeline
     from dreamstream.video_io import probe_video, read_frames
     from dreamstream.viz.composer import compose_comparison
 
@@ -77,25 +77,25 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
     )
 
     # Resolve output FPS: default to input FPS (enhance, don't interpolate)
-    if cfg.receiver.output_fps is None:
-        cfg.receiver.output_fps = meta.fps
+    if cfg.stages.output_fps is None:
+        cfg.stages.output_fps = meta.fps
         logger.info("Output FPS: %.1f (matching input)", meta.fps)
 
     # Compute output dimensions (maintain aspect ratio)
     aspect = meta.width / meta.height
-    out_h = cfg.receiver.output_height
+    out_h = cfg.stages.output_height
     out_w = int(out_h * aspect)
     out_w = out_w if out_w % 2 == 0 else out_w + 1
 
     # Build enhancement pipeline
     pipeline = EnhancementPipeline(
-        cfg.receiver, cfg.device, input_fps=meta.fps,
+        cfg.stages, cfg.device, input_fps=meta.fps,
         output_size=(out_w, out_h), input_size=(meta.width, meta.height),
     )
 
     # Metrics tracker
     tracker = MetricsTracker(
-        output_fps=cfg.receiver.output_fps, source_fps=meta.fps
+        output_fps=cfg.stages.output_fps, source_fps=meta.fps
     )
 
     # Comparison grid dimensions: 1x2 of 640x720 cells = 1280x720
@@ -104,10 +104,10 @@ def _run_pipeline(cfg: PipelineConfig, input_path: Path) -> dict:
 
     # Create video writers
     enhanced_writer = create_video_writer(
-        cfg.out_dir / "enhanced.mp4", cfg.receiver.output_fps, (out_w, out_h)
+        cfg.out_dir / "enhanced.mp4", cfg.stages.output_fps, (out_w, out_h)
     )
     comparison_writer = create_video_writer(
-        cfg.out_dir / "comparison.mp4", cfg.receiver.output_fps, (comp_w, comp_cell_h)
+        cfg.out_dir / "comparison.mp4", cfg.stages.output_fps, (comp_w, comp_cell_h)
     )
 
     tracker.start(source_resolution=f"{meta.width}x{meta.height}")
@@ -159,6 +159,23 @@ GDRIVE_WEIGHTS = {
 }
 
 
+def _download_sd_model() -> None:
+    """Pre-download SD 1.5 model to HuggingFace cache."""
+    try:
+        import torch
+        from diffusers import AutoPipelineForImage2Image
+        logger.info("Downloading SD 1.5 model to HuggingFace cache...")
+        AutoPipelineForImage2Image.from_pretrained(
+            "runwayml/stable-diffusion-v1-5",
+            torch_dtype=torch.float16,
+            safety_checker=None,
+            requires_safety_checker=False,
+        )
+        logger.info("SD 1.5 model cached successfully")
+    except Exception as e:
+        logger.warning("SD 1.5 download failed (non-fatal): %s", e)
+
+
 def _download_weights(weights_dir: Path) -> None:
     """Download optional AI model weights to weights_dir."""
     import urllib.request
@@ -206,6 +223,9 @@ def _download_weights(weights_dir: Path) -> None:
                     dst.write(src.read())
             logger.info("Downloaded %s (%.1f MB)", filename, dest.stat().st_size / 1e6)
 
+    # Pre-download SD 1.5 model to HuggingFace cache
+    _download_sd_model()
+
 
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
@@ -224,7 +244,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
 
         cfg = PipelineConfig(
-            receiver=ReceiverConfig(
+            stages=StagesConfig(
                 output_height=args.output_height,
                 output_fps=args.output_fps,
             ),

@@ -8,15 +8,15 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 
-from dreamstream.config import ReceiverConfig
-from dreamstream.receiver.enhancer import Enhancer, PassthroughEnhancer
-from dreamstream.receiver.interpolator import (
+from dreamstream.config import StagesConfig
+from dreamstream.stages.enhancer import Enhancer, PassthroughEnhancer, SDImg2ImgEnhancer
+from dreamstream.stages.interpolator import (
     DuplicationInterpolator,
     Interpolator,
     OpticalFlowInterpolator,
     RIFEInterpolator,
 )
-from dreamstream.receiver.upscaler import BicubicUpscaler, RealESRGANUpscaler, Upscaler
+from dreamstream.stages.upscaler import BicubicUpscaler, RealESRGANUpscaler, Upscaler
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class EnhancementPipeline:
 
     def __init__(
         self,
-        config: ReceiverConfig,
+        config: StagesConfig,
         device: torch.device,
         input_fps: float,
         output_size: Tuple[int, int] = (1280, 720),
@@ -58,7 +58,7 @@ class EnhancementPipeline:
         self._upscaler = self._build_upscaler(config)
         self._enhancer = self._build_enhancer(config)
 
-    def _build_interpolator(self, config: ReceiverConfig) -> Interpolator:
+    def _build_interpolator(self, config: StagesConfig) -> Interpolator:
         # Try RIFE first (AI interpolation)
         weights_path = config.weights_dir / "rife" / "flownet.pkl"
         try:
@@ -80,7 +80,7 @@ class EnhancementPipeline:
             logger.info("Interpolator: frame duplication (baseline)")
             return DuplicationInterpolator()
 
-    def _build_upscaler(self, config: ReceiverConfig) -> Upscaler:
+    def _build_upscaler(self, config: StagesConfig) -> Upscaler:
         if not self._needs_ai_upscale:
             self.model_status["upscaler"] = "bicubic (input >= target)"
             logger.info("Upscaler: bicubic (input already meets target resolution)")
@@ -98,10 +98,25 @@ class EnhancementPipeline:
             logger.info("Upscaler: bicubic (baseline)")
             return BicubicUpscaler()
 
-    def _build_enhancer(self, config: ReceiverConfig) -> Enhancer:
-        self.model_status["enhancer"] = "passthrough"
-        logger.info("Enhancer: passthrough (baseline)")
-        return PassthroughEnhancer()
+    def _build_enhancer(self, config: StagesConfig) -> Enhancer:
+        try:
+            enhancer = SDImg2ImgEnhancer(
+                model_id=config.enhancer_model_id,
+                device=self._device,
+                strength=config.enhancer_strength,
+                num_steps=config.enhancer_steps,
+                prompt=config.enhancer_prompt,
+                negative_prompt=config.enhancer_negative_prompt,
+                guidance_scale=config.enhancer_guidance_scale,
+            )
+            self.model_status["enhancer"] = "sd_img2img"
+            logger.info("Enhancer: SD img2img (AI)")
+            return enhancer
+        except Exception as e:
+            logger.warning("SD img2img unavailable (%s), falling back to passthrough", e)
+            self.model_status["enhancer"] = "passthrough"
+            logger.info("Enhancer: passthrough (baseline)")
+            return PassthroughEnhancer()
 
     @property
     def num_output_frames(self) -> int:

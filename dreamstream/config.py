@@ -20,15 +20,22 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ReceiverConfig:
+class StagesConfig:
     output_height: int = 720
     output_fps: float | None = None  # None = match input FPS
     weights_dir: Path = field(default_factory=lambda: Path("weights"))
+    # SD img2img enhancer settings
+    enhancer_model_id: str = "runwayml/stable-diffusion-v1-5"
+    enhancer_strength: float = 0.3
+    enhancer_steps: int = 10
+    enhancer_prompt: str = "high quality, sharp, detailed"
+    enhancer_negative_prompt: str = "blurry, noisy, artifacts, low quality"
+    enhancer_guidance_scale: float = 7.5
 
 
 @dataclass
 class PipelineConfig:
-    receiver: ReceiverConfig = field(default_factory=ReceiverConfig)
+    stages: StagesConfig = field(default_factory=StagesConfig)
     device: torch.device = field(default_factory=lambda: torch.device("cpu"))
     out_dir: Path = field(default_factory=lambda: Path("outputs"))
 
