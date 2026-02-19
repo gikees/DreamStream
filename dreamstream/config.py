@@ -26,12 +26,13 @@ class StagesConfig:
     weights_dir: Path = field(default_factory=lambda: Path("weights"))
     # SD img2img enhancer settings
     enhancer_model_id: str = "runwayml/stable-diffusion-v1-5"
-    enhancer_strength: float = 0.3
-    enhancer_steps: int = 10
+    enhancer_strength: float = 0.45
+    enhancer_steps: int = 20
     enhancer_prompt: str = "high quality, sharp, detailed"
     enhancer_negative_prompt: str = "blurry, noisy, artifacts, low quality"
     enhancer_guidance_scale: float = 7.5
     controlnet_model_id: str = "lllyasviel/sd-controlnet-canny"
+    controlnet_conditioning_scale: float = 0.75
 
 
 @dataclass

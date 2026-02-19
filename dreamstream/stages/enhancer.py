@@ -39,11 +39,11 @@ class SDImg2ImgEnhancer(Enhancer):
         negative_prompt: str = "blurry, noisy, artifacts, low quality",
         guidance_scale: float = 7.5,
         controlnet_model_id: str | None = None,
+        controlnet_conditioning_scale: float = 0.75,
     ) -> None:
-        import cv2 as _cv2  # noqa: F811 – ensure cv2 available at init time
-
         dtype = torch.float16 if device.type == "cuda" else torch.float32
         self._has_controlnet = False
+        self._controlnet_conditioning_scale = controlnet_conditioning_scale
 
         # Try loading ControlNet first
         if controlnet_model_id is not None:
@@ -70,6 +70,16 @@ class SDImg2ImgEnhancer(Enhancer):
                 model_id, torch_dtype=dtype, safety_checker=None,
                 requires_safety_checker=False,
             )
+
+        # Switch to DPM++ 2M Karras scheduler for better quality per step
+        try:
+            from diffusers import DPMSolverMultistepScheduler
+            self._pipe.scheduler = DPMSolverMultistepScheduler.from_config(
+                self._pipe.scheduler.config, use_karras_sigmas=True,
+            )
+            logger.info("Scheduler: DPM++ 2M Karras")
+        except Exception as e:
+            logger.warning("DPM++ scheduler unavailable (%s), keeping default", e)
 
         self._pipe.to(device)
         self._pipe.enable_attention_slicing()
@@ -128,6 +138,7 @@ class SDImg2ImgEnhancer(Enhancer):
             edges_resized = cv2.resize(edges, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
             canny_pil = Image.fromarray(edges_resized).convert("RGB")
             pipe_kwargs["control_image"] = canny_pil
+            pipe_kwargs["controlnet_conditioning_scale"] = self._controlnet_conditioning_scale
 
         result = self._pipe(**pipe_kwargs)
         out_pil = result.images[0]

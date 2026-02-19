@@ -110,6 +110,7 @@ class EnhancementPipeline:
                 negative_prompt=config.enhancer_negative_prompt,
                 guidance_scale=config.enhancer_guidance_scale,
                 controlnet_model_id=config.controlnet_model_id,
+                controlnet_conditioning_scale=config.controlnet_conditioning_scale,
             )
             if enhancer._has_controlnet:
                 self.model_status["enhancer"] = "sd_img2img_controlnet"
